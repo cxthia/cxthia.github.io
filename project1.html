@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Project 1 — Colorizing the Prokudin-Gorskii Collection</title>
+<script src="script.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <nav class="nav">
+    <a class="nav-title" href="index.html">CS180 — Computational Photography</a>
+    <div class="nav-links">
+      <a href="index.html">Home</a>
+      <a href="project0.html">Project 0</a>
+      <a href="project1.html" aria-current="page">Project 1</a>
+    </div>
+  </nav>
+</header>
+
+<main class="container">
+
+  <section class="hero">
+    <h1>Colorizing the Prokudin-Gorskii Collection</h1>
+    <p class="lede">
+      Reconstructing color photographs from Sergei Prokudin-Gorskii's early-1900s three-exposure glass plate negatives, 
+      by finding the pixel translation that brings each channel in line with the others.
+    </p>
+  </section>
+
+  <p>
+    Context: Each glass plate is a single tall scan stacking three exposures of the same scene, 
+    taken through blue, green, and red filters, from top to bottom.
+    Mechanical movement between exposures means the three channels aren't
+    pixel-aligned so recovering color means finding the 2D
+    integer shift for each channel that lines it up with the others. 
+    I treated this as a discrete search problem where I try each candidate shift and score each one against a reference channel.
+    Then, I keep only the shift with the best scores. 
+    To accommodate both small JPEGs and full-resolution scans (.tif), I used different scoring metrics and 
+    implemented a coarse-to-fine search strategy for the larger scans.
+  </p>
+
+  <h2>Single-scale alignment for JPEG images</h2>
+  <p>
+    For the three low-resolution example plates, I ran brute-force search over every integer displacement in a ±15 pixel window,
+    scored with both <strong>NCC</strong> (normalized cross-correlation) and <strong>L2</strong> (Euclidean distance). 
+    Both metrics agreed exactly on all three images:
+  </p>
+
+  <table>
+    <caption>Single-scale offsets. NCC and L2 agree </caption>
+    <thead>
+      <tr><th>Image</th><th>G offset (dy, dx)</th><th>R offset (dy, dx)</th><th>Time</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>cathedral.jpg</td><td>(5, 2)</td><td>(12, 3)</td><td>~2s</td></tr>
+      <tr><td>monastery.jpg</td><td>(&minus;3, 2)</td><td>(3, 2)</td><td>~2s</td></tr>
+      <tr><td>tobolsk.jpg</td><td>(3, 3)</td><td>(6, 3)</td><td>~2.0s</td></tr>
+    </tbody>
+  </table>
+
+  <div class="image-grid">
+    <figure>
+      <img src="assets/project1/cathedral_colorized.jpg" alt="cathedral.jpg aligned result" onerror="imgFallback(this)">
+      <figcaption>cathedral.jpg</figcaption>
+    </figure>
+    <figure>
+      <img src="assets/project1/monastery_colorized.jpg" alt="monastery.jpg aligned result" onerror="imgFallback(this)">
+      <figcaption>monastery.jpg</figcaption>
+    </figure>
+    <figure>
+      <img src="assets/project1/tobolsk_colorized.jpg" alt="tobolsk.jpg aligned result" onerror="imgFallback(this)">
+      <figcaption>tobolsk.jpg</figcaption>
+    </figure>
+  </div>
+
+  <p>
+    Exhaustive search works here since there is only 31 by 31 (=961) candidate shifts to check per channel 
+    since the image is so small. This only take around 2 seconds each and is fast enough.
+  </p>
+
+  <h2>Multi-scale pyramid alignment (all 14 example images)</h2>
+  <p>
+    The full-resolution <code>.tif</code> scans are 10&ndash;20&times; larger on each side of the images than the JPEGs.
+    Hence, displacements can exceed 100 pixels so using brute force is too slow. 
+    Instead, I built a recursive coarse-to-fine Gaussian pyramid where I repeatedly downsample, 
+    align at the smallest scale, then work my way back up. Lastly, I refined the estimate with a small local search at each level. 
+    The three JPEGs above also go through the same pyramid path and they mostly result in identical offsets to the single-scale search
+    (with the outlier being R offset on monastery.jpg). This suggests that both methods agree and are valid.
+  </p>
+
+  <table>
+    <caption>Multi-scale pyramid offsets, all 14 provided example images</caption>
+    <thead>
+      <tr><th>Image</th><th>Method</th><th>G offset</th><th>R offset</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>cathedral.jpg</td><td>pyramid</td><td>(5, 2)</td><td>(12, 3)</td></tr>
+      <tr><td>monastery.jpg</td><td>pyramid</td><td>(&minus;3, 2)</td><td>(3, 2)</td></tr>
+      <tr><td>tobolsk.jpg</td><td>pyramid</td><td>(3, 3)</td><td>(6, 3)</td></tr>
+      <tr><td>church.tif</td><td>pyramid + edges</td><td>(25, 4)</td><td>(58, &minus;4)</td></tr>
+      <tr><td>emir.tif</td><td>pyramid + edges</td><td>(49, 24)</td><td>(107, 40)</td></tr>
+      <tr><td>harvesters.tif</td><td>pyramid + edges</td><td>(60, 17)</td><td>(124, 14)</td></tr>
+      <tr><td>icon.tif</td><td>pyramid + edges</td><td>(42, 17)</td><td>(90, 23)</td></tr>
+      <tr><td>ilemselga.tif</td><td>pyramid + edges</td><td>(40, 7)</td><td>(131, 11)</td></tr>
+      <tr><td>melons.tif</td><td>pyramid + edges</td><td>(80, 10)</td><td>(177, 13)</td></tr>
+      <tr><td>religous_painting.tif</td><td>pyramid + edges</td><td>(30, 6)</td><td>(70, 6)</td></tr>
+      <tr><td>self_portrait.tif</td><td>pyramid + edges</td><td>(78, 29)</td><td>(176, 37)</td></tr>
+      <tr><td>siren.tif</td><td>pyramid + edges</td><td>(49, &minus;6)</td><td>(96, &minus;24)</td></tr>
+      <tr><td>three_generations.tif</td><td>pyramid + edges</td><td>(54, 12)</td><td>(111, 9)</td></tr>
+      <tr><td>wharf.tif</td><td>pyramid + edges</td><td>(15, &minus;7)</td><td>(83, &minus;16)</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <code>.tif</code> some scans are aligned on edge features (gradient magnitude) rather than raw intensity (see Bells &amp; Whistles below for the rationale)
+  </div>
+
+  <div class="image-grid cols-4">
+    <figure><img src="assets/project1/church_colorized.jpg" alt="church.tif result" onerror="imgFallback(this)"><figcaption>church.tif</figcaption></figure>
+    <figure><img src="assets/project1/emir_colorized.jpg" alt="emir.tif result" onerror="imgFallback(this)"><figcaption>emir.tif</figcaption></figure>
+    <figure><img src="assets/project1/harvesters_colorized.jpg" alt="harvesters.tif result" onerror="imgFallback(this)"><figcaption>harvesters.tif</figcaption></figure>
+    <figure><img src="assets/project1/icon_colorized.jpg" alt="icon.tif result" onerror="imgFallback(this)"><figcaption>icon.tif</figcaption></figure>
+    <figure><img src="assets/project1/ilemselga_colorized.jpg" alt="ilemselga.tif result" onerror="imgFallback(this)"><figcaption>ilemselga.tif</figcaption></figure>
+    <figure><img src="assets/project1/melons_colorized.jpg" alt="melons.tif result" onerror="imgFallback(this)"><figcaption>melons.tif</figcaption></figure>
+    <figure><img src="assets/project1/religous_painting_colorized.jpg" alt="religous_painting.tif result" onerror="imgFallback(this)"><figcaption>religous_painting.tif</figcaption></figure>
+    <figure><img src="assets/project1/self_portrait_colorized.jpg" alt="self_portrait.tif result" onerror="imgFallback(this)"><figcaption>self_portrait.tif</figcaption></figure>
+    <figure><img src="assets/project1/siren_colorized.jpg" alt="siren.tif result" onerror="imgFallback(this)"><figcaption>siren.tif</figcaption></figure>
+    <figure><img src="assets/project1/three_generations_colorized.jpg" alt="three_generations.tif result" onerror="imgFallback(this)"><figcaption>three_generations.tif</figcaption></figure>
+    <figure><img src="assets/project1/wharf_colorized.jpg" alt="wharf.tif result" onerror="imgFallback(this)"><figcaption>wharf.tif</figcaption></figure>
+  </div>
+
+  <h2>My own examples</h2>
+  <p>
+    I downloaded four additional plates from the
+    <a href="https://www.loc.gov/collections/prokudin-gorskii/?st=grid">Library of Congress collection</a> to see how the algorithm handled images it
+    had not been shaped around. All four could align relatively cleanly.
+  </p>
+
+  <table>
+    <caption>Offsets on my own selected examples</caption>
+    <thead><tr><th>Image</th><th>G offset</th><th>R offset</th></tr></thead>
+    <tbody>
+      <tr><td>additional1.jpg</td><td>(&minus;2, 1)</td><td>(1, 2)</td></tr>
+      <tr><td>additional2.jpg</td><td>(5, 1)</td><td>(12, 3)</td></tr>
+      <tr><td>additional3.jpg</td><td>(4, 1)</td><td>(8, 4)</td></tr>
+      <tr><td>additional4.jpg</td><td>(4, 2)</td><td>(7, 4)</td></tr>
+    </tbody>
+  </table>
+
+  <div class="image-grid cols-4">
+    <figure><img src="assets/project1/additional1_colorized.jpg" alt="additional1.jpg result" onerror="imgFallback(this)"><figcaption>additional1.jpg</figcaption></figure>
+    <figure><img src="assets/project1/additional2_colorized.jpg" alt="additional2.jpg result" onerror="imgFallback(this)"><figcaption>additional2.jpg</figcaption></figure>
+    <figure><img src="assets/project1/additional3_colorized.jpg" alt="additional3.jpg result" onerror="imgFallback(this)"><figcaption>additional3.jpg</figcaption></figure>
+    <figure><img src="assets/project1/additional4_colorized.jpg" alt="additional4.jpg result" onerror="imgFallback(this)"><figcaption>additional4.jpg</figcaption></figure>
+  </div>
+
+  <h2>Where the algorithm failed and why</h2>
+  <p>
+    Every image above aligned correctly under NCC at both single- and multi-scale. 
+    On the other hand, L2 metric did not do as well under the pyramid method as it disagreed with
+    its own single-scale result on two images (cathedral and additional2).
+  </p>
+  <ul>
+    <li><strong>cathedral.jpg</strong>: L2 single-scale found R = (12, 3),
+      L2 pyramid found R = (10, 28), wrong.</li>
+    <li><strong>additional2.jpg</strong>: L2 single-scale found R = (12, 3),
+      L2 pyramid found R = (44, 5), wrong.</li>
+  </ul>
+  <p>
+    This could be due to L2 penalizing intensity differences between channels.
+    For example, if channel G is brighter than channel B for reasons no related to alignment, 
+    L2 will be biased towards whatever offset minimizes brightness difference instead of structural differences.
+    This results in the algorithm locking onto a shift that matches average brightness rather than scene structure for heavily downsampled, low-detail pyramid levels. 
+    The moment the estimate on the coarse level is wrong, 
+    the narrow local refinement search at each finer level is not wide enough to recover. 
+    NCC does not face this problem because it is the cosine similarity of mean-centered signals so it removes the means and scale by norms before comparing.
+    Hence, NCC is invariant to the brightness difference between channels that L2 is affected by.
+    Hence, I decided to keep NCC as the default metric throughout this project and
+    L2 is used only at the required comparison points.
+  </p>
+
+  <h2>Bells &amp; whistles</h2>
+
+  <h3>Exact wraparound removal</h3>
+  <p>
+    I implemented a circular shift with <code>np.roll</code> so that every aligned channel wraps a band of pixels in from the opposite edge. 
+    Rather than guessing where the band of rubbish pixels is, I computed it from the known offsets.
+    For an offset <code>(dy, dx)</code>, the invalid region will be <code>max(0, dy)</code> rows at the top or <code>max(0, -dy)</code> rows at the bottom.
+    As for the columns, it will follow the same logic. Then, I take the tightest bound across all three channels to get the exact shared 'valid' region without the thresholds.
+  </p>
+
+  <figure class="single-image">
+  <img src="assets/project1/np_roll_wraparound_demo.png"
+       alt="Comparison of alignment before and after wraparound removal"
+       onerror="imgFallback(this)">
+  <figcaption>
+    Wraparound removal comparison
+  </figcaption>
+</figure>
+
+  <h3>Automatic border cropping</h3>
+  <p>
+    After the exact wraparound crop, a heuristic pass scans inward from each
+    edge, comparing each row or column's brightness to the image's overall
+    median, to catch any leftover physical plate border the exact method
+    wasn't targeting.
+  </p>
+  
+  <h4>Example 1: Cathedral</h4>
+  <div class="compare-pair">
+    <figure>
+      <img src="assets/project1/cathedral_uncropped.png" alt="Before border crop" onerror="imgFallback(this)">
+      <figcaption>Before border crop</figcaption>
+    </figure>
+    <figure>
+      <img src="assets/project1/cathedral_cropped.png" alt="After border crop" onerror="imgFallback(this)">
+      <figcaption>After border crop</figcaption>
+    </figure>
+  </div>
+
+  <h4>Example 2: Self-portrait</h4>
+  <div class="compare-pair">
+    <figure>
+      <img src="assets/project1/self_portrait_uncropped.png" alt="Before border crop" onerror="imgFallback(this)">
+      <figcaption>Before border crop</figcaption>
+    </figure>
+    <figure>
+      <img src="assets/project1/self_portrait_cropped.png" alt="After border crop" onerror="imgFallback(this)">
+      <figcaption>After border crop</figcaption>
+    </figure>
+  </div>
+
+  <h4>Example 3: Emir</h4>
+  <div class="compare-pair">
+    <figure>
+      <img src="assets/project1/emir_uncropped.png" alt="Before border crop" onerror="imgFallback(this)">
+      <figcaption>Before border crop</figcaption>
+    </figure>
+    <figure>
+      <img src="assets/project1/emir_cropped.png" alt="After border crop" onerror="imgFallback(this)">
+      <figcaption>After border crop</figcaption>
+    </figure>
+  </div>
+  
+
+  <h3>Automatic contrast per channel</h3>
+  <p>
+    The raw aligned images had visibly different black points and white points per channel that are not due to misalignment. 
+    Stretching each channel independently between its own 1st and 99th percentile corrects both an additive offset and a multiplicative gain difference between channels.
+  </p>
+  <h4>Example 1: Cathedral</h4>
+  <div class="compare-pair">
+    <figure>
+      <img src="assets/project1/cathedral_cropped.png" alt="Before contrast stretch" onerror="imgFallback(this)">
+      <figcaption>Before contrast stretch</figcaption>
+    </figure>
+    <figure>
+      <img src="assets/project1/cathedral_balanced.png" alt="After per-channel contrast stretch" onerror="imgFallback(this)">
+      <figcaption>After per-channel contrast stretch</figcaption>
+    </figure>
+  </div>
+
+  <h4>Example 2: Melons</h4>
+  <div class="compare-pair">
+    <figure>
+      <img src="assets/project1/melons_befbalance.png" alt="Before contrast stretch" onerror="imgFallback(this)">
+      <figcaption>Before contrast stretch</figcaption>
+    </figure>
+    <figure>
+      <img src="assets/project1/melons_balanced.png" alt="After per-channel contrast stretch" onerror="imgFallback(this)">
+      <figcaption>After per-channel contrast stretch</figcaption>
+    </figure>
+  </div>
+
+  <h4>Example 3: Sirens</h4>
+  <div class="compare-pair">
+    <figure>
+      <img src="assets/project1/sirens_befbalance.png" alt="Before contrast stretch" onerror="imgFallback(this)">
+      <figcaption>Before contrast stretch</figcaption>
+    </figure>
+    <figure>
+      <img src="assets/project1/sirens_balanced.png" alt="After per-channel contrast stretch" onerror="imgFallback(this)">
+      <figcaption>After per-channel contrast stretch</figcaption>
+    </figure>
+  </div>
+
+  <h3>Automatic white balance (tried but did not end up using)</h3>
+  <p>
+    I also implemented gray-world white balance, which scales each channel such that its median matches a shared target. 
+    However, during testing, it consistently made the results worse.
+    Potentially because gray-world assumes the average pixel in a scene should be neutral gray but that assumption does not hold for scenes that are
+    dominated by one color. For example, sky, trees, etc. 
+    I kept the function in the code, but the final pipeline uses per-channel contrast alone.
+  </p>
+
+  <h3>Edge-based alignment features</h3>
+  <p>
+    For some full-resolution <code>.tif</code> scans, alignment was on Sobel gradient magnitude instead of raw pixel intensity. 
+    This targets one of the failure case in this dataset where a channel whose brightness response to the same scene content differs sharply from the others.
+    In this specific example of Emir, the brightly colored robe might be bright in one filter and dark in another. 
+    Edges correspond to physical scene structure, which survives that kind of filter-response mismatch far better than raw intensity does.
+  </p>
+  <div class="compare-pair">
+    <figure>
+      <img src="assets/project1/emir_raw_intensity.jpg" alt="emir.tif aligned on raw intensity" onerror="imgFallback(this)">
+      <figcaption>emir.tif, aligned on raw intensity (misaligned)</figcaption>
+    </figure>
+    <figure>
+      <img src="assets/project1/emir_colorized.jpg" alt="emir.tif aligned on edge features" onerror="imgFallback(this)">
+      <figcaption>emir.tif, aligned on edge features (corrected)</figcaption>
+    </figure>
+  </div>
+
+</main>
+
+<footer class="site-footer">
+  <p>CS180 · <a href="https://github.com/">GitHub</a></p>
+</footer>
+
+</body>
+</html>

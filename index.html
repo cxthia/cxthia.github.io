@@ -1,16 +1,63 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>My Portfolio</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 20px;
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CS180 Projects</title>
+<script src="script.js"></script>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <h1>Welcome to My CS180 Portfolio!</h1>
-    <a href="./0/index.html">Project 0</a>
+
+<header class="site-header">
+  <nav class="nav">
+    <a class="nav-title" href="index.html">CS180 — Computational Photography</a>
+    <div class="nav-links">
+      <a href="index.html" aria-current="page">Home</a>
+      <a href="project0.html">Project 0</a>
+      <a href="project1.html">Project 1</a>
+    </div>
+  </nav>
+</header>
+
+<main class="container">
+  <section class="hero">
+    <h1>Course projects</h1>
+    <p class="lede">
+      Write-ups for my CS180 (Intro to Computer Vision and Computational
+      Photography) projects, in the order I completed them.
+    </p>
+  </section>
+
+  <div class="project-grid">
+
+    <a class="project-card" href="project0.html">
+      <div class="thumb">
+        <img src="assets/project0/selfie-close.jpg">
+      </div>
+      <div class="card-body">
+        <h3>Project 0</h3>
+        <p>Becoming Friends with Your Camera</p>
+      </div>
+    </a>
+
+    <a class="project-card" href="project1.html">
+      <div class="thumb">
+        <img src="assets/project1/cathedral_colorized.jpg" alt="Project 1 image" onerror="imgFallback(this)">
+      </div>
+      <div class="card-body">
+        <h3>Project 1 — Colorizing the Prokudin-Gorskii Collection</h3>
+        <p>Aligning three-exposure glass plate scans into single color
+          photographs, from brute-force search to a coarse-to-fine pyramid.</p>
+      </div>
+    </a>
+
+  </div>
+</main>
+
+<footer class="site-footer">
+  <p>CS180 · <a href="https://github.com/">GitHub</a></p>
+</footer>
+
 </body>
 </html>
