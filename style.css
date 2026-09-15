@@ -218,7 +218,7 @@ code { background: var(--paper-dim); padding: 0.1em 0.35em; border-radius: 3px; 
   gap: 1.2rem;
   margin: 1.6rem 0;
 }
-.image-grid.cols-4 { grid-template-columns: repeat(4, 1fr); }
+.image-grid.cols-4 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .image-grid.cols-2 { grid-template-columns: repeat(2, 1fr); }
 @media (max-width: 720px) {
   .image-grid, .image-grid.cols-4, .image-grid.cols-2 { grid-template-columns: repeat(2, 1fr); }
