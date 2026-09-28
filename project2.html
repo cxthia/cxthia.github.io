@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Project 2 — Fun with Filters and Frequencies</title>
+<script src="script.js"></script>
+<script>window.MathJax={tex:{inlineMath:[['\\(','\\)']],displayMath:[['\\[','\\]']]}};</script>
+<script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <nav class="nav">
+    <a class="nav-title" href="index.html">CS180 — Computational Photography</a>
+    <div class="nav-links">
+      <a href="index.html">Home</a>
+      <a href="project0.html">Project 0</a>
+      <a href="project1.html">Project 1</a>
+      <a href="project2.html" aria-current="page">Project 2</a>
+    </div>
+  </nav>
+</header>
+
+<main class="container-wide">
+<section class="hero">
+  <h1>Fun with Filters and Frequencies</h1>
+  <p class="lede">Building intuition for 2D convolution and finite-difference edge detection, then using
+  frequency-domain ideas for sharpening, hybrid images, and multiresolution blending.</p>
+</section>
+
+<nav class="toc">
+  <a href="#p11">1.1 Convolution</a> <a href="#p12">1.2 Gradients</a> <a href="#p13">1.3 Gaussian &amp; DoG</a>
+  <a href="#p21">2.1 Unsharp mask</a> <a href="#p22">2.2 Hybrid images</a> <a href="#p23">2.3 Stacks</a> <a href="#p24">2.4 Blending</a>
+</nav>
+
+<h2>Part 1: Filters and Edges</h2>
+<h3 id="p11">1.1 Convolution from scratch</h3>
+
+<p>
+I implemented 2D convolution from scratch using NumPy in two ways: a
+<strong>four-loop</strong> implementation and a more efficient
+<strong>two-loop</strong> implementation. Both implementations use zero padding
+for <code>'same'</code> and <code>'full'</code> modes and explicitly flip the
+kernel, as required for true convolution rather than cross-correlation.
+</p>
+
+<h4>Padding and four-loop convolution</h4>
+
+<p>
+First, I implemented zero padding using <code>np.pad</code>. For
+<code>'same'</code> mode, the padding is chosen such that the output has the
+same spatial dimensions as the input (with the usual centered alignment).
+For <code>'full'</code> mode, the image is padded by <code>kernel_size - 1</code>
+on each side.
+</p>
+
+<pre><code>def pad_image(image: np.ndarray, kh: int, kw: int,
+               mode: str = "same") -&gt; np.ndarray:
+    if mode == "full":
+        pad_top = pad_bottom = kh - 1
+        pad_left = pad_right = kw - 1
+
+    elif mode == "same":
+        pad_bottom = (kh - 1) // 2
+        pad_top = (kh - 1) - pad_bottom
+        pad_right = (kw - 1) // 2
+        pad_left = (kw - 1) - pad_right
+
+    else:
+        raise ValueError(
+            f"mode must be 'same' or 'full', got {mode!r}"
+        )
+
+    return np.pad(
+        image,
+        pad_width=((pad_top, pad_bottom),
+                   (pad_left, pad_right)),
+        mode="constant",
+        constant_values=0.0,
+    )
+
+
+def convolve2d_4loop(image: np.ndarray,
+                     kernel: np.ndarray,
+                     mode: str = "same") -&gt; np.ndarray:
+    kh, kw = kernel.shape
+
+    # Flip the kernel for true convolution instead of cross-correlation
+    flipped_kernel = kernel[::-1, ::-1]
+
+    padded = pad_image(image, kh, kw, mode)
+
+    H_out = padded.shape[0] - kh + 1
+    W_out = padded.shape[1] - kw + 1
+    out = np.zeros((H_out, W_out), dtype=np.float64)
+
+    for i in range(H_out):
+        for j in range(W_out):
+            acc = 0.0
+            for ki in range(kh):
+                for kj in range(kw):
+                    acc += (
+                        padded[i + ki, j + kj]
+                        * flipped_kernel[ki, kj]
+                    )
+            out[i, j] = acc
+    return out</code></pre>
+<p>
+The four loops iterate over the output row, output column, kernel row, and
+kernel column. At each output location, the corresponding image patch is
+multiplied element-by-element with the flipped kernel and summed.
+</p>
+
+<h4>Two-loop convolution</h4>
+
+<p>
+I then reduced the implementation to two Python loops. The inner two
+kernel loops are replaced by a NumPy element-wise multiplication followed
+by <code>np.sum</code>. This performs the same computation while reducing loop overhead.
+</p>
+
+<pre><code>def convolve2d_2loop(image: np.ndarray,
+                     kernel: np.ndarray,
+                     mode: str = "same") -&gt; np.ndarray:
+    kh, kw = kernel.shape
+    flipped_kernel = kernel[::-1, ::-1]
+    padded = pad_image(image, kh, kw, mode)
+
+    H_out = padded.shape[0] - kh + 1
+    W_out = padded.shape[1] - kw + 1
+    out = np.zeros((H_out, W_out), dtype=np.float64)
+
+    for i in range(H_out):
+        for j in range(W_out):
+            patch = padded[i:i + kh, j:j + kw]
+            out[i, j] = np.sum(patch * flipped_kernel)
+    return out</code></pre>
+
+<h4>Comparison with <code>scipy.signal.convolve2d</code></h4>
+
+<p>
+I compared both implementations against
+<code>scipy.signal.convolve2d</code> using random images and both odd
+(3&times;5) and even (4&times;6) kernels. I tested both <code>'same'</code>
+and <code>'full'</code> modes with zero-filled boundaries. For even kernels,
+only the two-loop implementation was tested, since the four-loop version is
+slower and less efficient due to the lack of a single center pixel, making 
+centering/padding ambiguous.
+</p>
+
+<pre><code>def _check(name, a, b, atol=1e-8):
+    ok = np.allclose(a, b, atol=atol)
+    status = "PASS" if ok else "FAIL"
+    print(
+        f"[{status}] {name} "
+        f"shapes={a.shape} vs {b.shape} "
+        f"max_abs_err={np.max(np.abs(a - b)):.3e}"
+    )
+    assert ok, f"Mismatch in {name}"
+
+
+test_img = RNG.random((20, 17))
+odd_kernel = RNG.random((3, 5))
+even_kernel = RNG.random((4, 6))
+
+for mode in ("same", "full"):
+    ref = scipy_convolve2d(
+        test_img,
+        odd_kernel,
+        mode=mode,
+        boundary="fill",
+        fillvalue=0
+    )
+
+    out4 = convolve2d_4loop(
+        test_img, odd_kernel, mode=mode
+    )
+
+    out2 = convolve2d_2loop(
+        test_img, odd_kernel, mode=mode
+    )
+
+    _check("4-loop vs SciPy", out4, ref)
+    _check("2-loop vs SciPy", out2, ref)
+
+for mode in ("same", "full"):
+    ref = scipy_convolve2d(
+        test_img,
+        even_kernel,
+        mode=mode,
+        boundary="fill",
+        fillvalue=0
+    )
+
+    out2 = convolve2d_2loop(
+        test_img, even_kernel, mode=mode
+    )
+
+    _check("2-loop vs SciPy (even kernel)", out2, ref)</code></pre>
+
+<p>
+All tested outputs matched <code>scipy.signal.convolve2d</code> to numerical
+precision, with the same output shapes and a maximum absolute error of about
+2&times;10<sup>&minus;15</sup>.
+</p>
+
+<h4>9&times;9 box filter</h4>
+
+<p>
+Next, I converted my image to grayscale and applied a 9&times;9 box filter.
+Each element of the filter has value <code>1/81</code>, so the output at each
+pixel is the average of the surrounding 9&times;9 neighborhood.
+</p>
+
+<pre><code># Convert the image to grayscale first
+image_1_1_gray = cv2.cvtColor(
+    image_1_1.astype(np.float32),
+    cv2.COLOR_RGB2GRAY
+)
+
+# 9x9 box (mean) filter
+box_filter_9x9 = (
+    np.ones((9, 9), dtype=np.float64) / 81.0
+)
+
+# Convolve using the implementation from scratch
+box_2loop = convolve2d_2loop(
+    image_1_1_gray,
+    box_filter_9x9,
+    mode="same"
+)
+
+# Reference result from SciPy
+box_scipy = scipy_convolve2d(
+    image_1_1_gray,
+    box_filter_9x9,
+    mode="same",
+    boundary="fill",
+    fillvalue=0
+)
+
+assert np.allclose(box_2loop, box_scipy)</code></pre>
+
+<figure class="figure ">
+    <img src="assets/project2/11_1.png"
+         alt="Original grayscale image and the 9x9 box-filtered result"
+         loading="lazy"
+         onerror="imgFallback(this)">
+    <figcaption>
+        Original grayscale image and the 9&times;9 box-filtered result
+        (mean blur).
+    </figcaption>
+</figure>
+
+<h4>Finite difference filters</h4>
+
+<p>
+Finally, I applied the finite difference operators
+<code>D<sub>x</sub> = [1 0 -1]</code> and
+<code>D<sub>y</sub> = D<sub>x</sub><sup>T</sup>.
+These filters approximate horizontal and vertical intensity changes,
+highlighting edges in the image.
+</p>
+
+<pre><code>D_x = np.array([[1.0, 0.0, -1.0]])
+D_y = np.array([[1.0], [0.0], [-1.0]])
+
+# Apply the filters using the convolution implementation
+Ix = convolve2d_2loop(
+    image_1_1_gray,
+    D_x,
+    mode="same",
+    boundary="fill",
+    fillvalue=0
+)
+
+Iy = convolve2d_2loop(
+    image_1_1_gray,
+    D_y,
+    mode="same",
+    boundary="fill",
+    fillvalue=0
+)</code></pre>
+
+<figure class="figure ">
+    <img src="assets/project2/11_2.png"
+         alt="Original image and finite difference results using Dx and Dy"
+         loading="lazy"
+         onerror="imgFallback(this)">
+    <figcaption>
+        Original image, I * D<sub>x</sub>, and I * D<sub>y</sub>.
+        D<sub>x</sub> responds primarily to vertical edges, while
+        D<sub>y</sub> responds primarily to horizontal edges.
+    </figcaption>
+</figure>
+
+<h4>Runtime comparison</h4>
+
+<table>
+<caption>
+    Runtime for a 9&times;9 box filter, &lsquo;same&rsquo; mode, on a
+    1280&times;720 grayscale image
+</caption>
+<thead>
+<tr>
+    <th>Implementation</th>
+    <th>Time</th>
+    <th>vs. SciPy</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+    <td>4 loops (pure Python)</td>
+    <td>38.06 s</td>
+    <td>~207&times; slower</td>
+</tr>
+<tr>
+    <td>2 loops (NumPy inner sum)</td>
+    <td>5.00 s</td>
+    <td>~27&times; slower</td>
+</tr>
+<tr>
+    <td><code>scipy.signal.convolve2d</code></td>
+    <td>0.18 s</td>
+    <td>1&times;</td>
+</tr>
+</tbody>
+</table>
+
+<p>
+<strong>Runtime</strong>
+The four-loop implementation performs the kernel multiplication and
+accumulation entirely in Python, resulting in substantial interpreter
+overhead. The two-loop implementation moves the inner kernel computation
+into NumPy, making it about 7.6&times; faster in this experiment. SciPy is
+faster still because its convolution implementation is optimized and does
+not require Python-level loops over the image.
+</p>
+
+<p>
+<strong>Boundaries</strong>
+All three implementations use zero padding, matching SciPy's
+<code>boundary="fill", fillvalue=0</code>. Near the image boundary, part of
+the kernel therefore overlaps with artificial zero-valued pixels. For the
+box filter, this can make the boundary appear slightly darker. For the
+finite-difference filters, the transition between the real image and the
+zero padding can also produce an artificial edge along the image frame.
+Using reflected or replicated padding would reduce these boundary effects.
+</p>
+<figure class="figure "><img src="assets/project2/11_1.png" alt="Original grayscale image and the 9&amp;times;9 box-filtered result (mean blur)." loading="lazy" onerror="imgFallback(this)"><figcaption>Original grayscale image and the 9&times;9 box-filtered result (mean blur).</figcaption></figure>
+<figure class="figure "><img src="assets/project2/11_2.png" alt="Original, I * D&lt;sub&gt;x&lt;/sub&gt; (responds to vertical edges) and I * D&lt;sub&gt;y&lt;/sub&gt; (responds to horizontal edges), with D&lt;sub&gt;x&lt;/sub&gt; = [1 0 &amp;minus;1], D&lt;sub&gt;y&lt;/sub&gt; = D&lt;sub&gt;x&lt;/sub&gt;&lt;sup&gt;T&lt;/sup&gt;." loading="lazy" onerror="imgFallback(this)"><figcaption>Original, I * D<sub>x</sub> (responds to vertical edges) and I * D<sub>y</sub> (responds to horizontal edges), with D<sub>x</sub> = [1 0 &minus;1], D<sub>y</sub> = D<sub>x</sub><sup>T</sup>.</figcaption></figure>
+
+
+<h3 id="p12">1.2 Finite-difference gradients and edges</h3>
+<p>Convolving the cameraman image with D<sub>x</sub> and D<sub>y</sub> gives the partial derivatives; the gradient magnitude is
+\(\sqrt{I_x^2+I_y^2}\). I binarized it by trying several thresholds and judging by eye.</p>
+<figure class="figure "><img src="assets/project2/12_1.png" alt="Partial derivatives I&lt;sub&gt;x&lt;/sub&gt;, I&lt;sub&gt;y&lt;/sub&gt; and gradient magnitude." loading="lazy" onerror="imgFallback(this)"><figcaption>Partial derivatives I<sub>x</sub>, I<sub>y</sub> and gradient magnitude.</figcaption></figure>
+<figure class="figure "><img src="assets/project2/12_2.png" alt="Thresholds 0.06, 0.12 and 0.20." loading="lazy" onerror="imgFallback(this)"><figcaption>Thresholds 0.06, 0.12 and 0.20.</figcaption></figure>
+
+<p><strong>Choice and justification: &tau; = 0.12.</strong> At 0.06 the grass and sky fill with speckle; at 0.20 faint but real edges (background buildings, soft shadows) vanish.
+0.12 keeps the figure, camera and tripod contours while removing most isolated noise pixels, though the textured grass still leaks some.</p>
+<div class="single-image" style="max-width:420px"><figure class="figure "><img src="assets/project2/12_3.png" alt="Final binarized edge map, &amp;tau; = 0.12." loading="lazy" onerror="imgFallback(this)"><figcaption>Final binarized edge map, &tau; = 0.12.</figcaption></figure>
+</div>
+
+<h3 id="p13">1.3 Gaussian smoothing and Derivative-of-Gaussian</h3>
+<p>The finite-difference result is noisy because a derivative amplifies high frequencies. I built a 9&times;9 Gaussian (&sigma; = 2) as the outer product of two
+<code>cv2.getGaussianKernel</code> vectors, blurred first, then repeated the gradient pipeline (re-tuned to &tau; = 0.05, since blurring lowers gradient amplitude).</p>
+<figure class="figure "><img src="assets/project2/13_1.png" alt="The 1D Gaussian and its 2D outer product." loading="lazy" onerror="imgFallback(this)"><figcaption>The 1D Gaussian and its 2D outer product.</figcaption></figure>
+<figure class="figure "><img src="assets/project2/13_2.png" alt="Top: no smoothing. Bottom: Gaussian-blurred, then finite difference." loading="lazy" onerror="imgFallback(this)"><figcaption>Top: no smoothing. Bottom: Gaussian-blurred, then finite difference.</figcaption></figure>
+
+<p><strong>Differences.</strong> Smoothing removes the salt-and-pepper responses in the grass and sky, and the surviving edges are continuous and closed.
+The cost is localization: edges become thicker and slightly less precise (the usual detection vs. localization trade-off of &sigma;).
+The yellow frame in the smoothed map is a zero-padding artifact since blurring against a black border creates a real intensity step at the image edge.</p>
+
+<p><strong>DoG filters.</strong> Because convolution is associative, \(\partial_x(G*I)=(G*D_x)*I\), so I pre-convolved G with D<sub>x</sub> and D<sub>y</sub>
+(<code>mode='full'</code>, giving 9&times;11 and 11&times;9 kernels) and applied each in one pass.</p>
+<figure class="figure "><img src="assets/project2/13_3.png" alt="The DoG&lt;sub&gt;x&lt;/sub&gt; and DoG&lt;sub&gt;y&lt;/sub&gt; filters." loading="lazy" onerror="imgFallback(this)"><figcaption>The DoG<sub>x</sub> and DoG<sub>y</sub> filters.</figcaption></figure>
+<figure class="figure "><img src="assets/project2/13_4.png" alt="Two-pass (blur then D) vs. one-pass (single DoG) partial derivatives." loading="lazy" onerror="imgFallback(this)"><figcaption>Two-pass (blur then D) vs. one-pass (single DoG) partial derivatives.</figcaption></figure>
+
+<p><strong>Verification.</strong> The two pipelines agree to ~7&times;10<sup>&minus;16</sup>. Over the full array the maximum difference is 0.40, all inside a
+border strip about one kernel wide, because the two-pass version zero-pads twice and the DoG version once. The display contrast differs only because of that border.</p>
+<figure class="figure "><img src="assets/project2/13_5.png" alt="Raw finite difference vs. Gaussian-then-difference vs. single DoG. The last two are visually identical, and both are much cleaner than the first." loading="lazy" onerror="imgFallback(this)"><figcaption>Raw finite difference vs. Gaussian-then-difference vs. single DoG. The last two are visually identical, and both are much cleaner than the first.</figcaption></figure>
+
+
+<h2>Part 2: Frequencies and Multiresolution</h2>
+<h3 id="p21">2.1 Unsharp mask</h3>
+<p>Blurring an image with a Gaussian G is a <strong>low-pass</strong> filter: it averages neighboring pixels, which smooths out rapid intensity changes (edges, fine texture) and keeps the slowly varying parts. So the blur \(I*G\) is the image with its high frequencies removed. Subtracting it from the original leaves exactly what the blur took away, \(I - I*G\), a <strong>high-pass</strong> version containing only edges and fine detail. An image looks sharp when its edges have high contrast, i.e. when this high-frequency content is strong, so we add a scaled copy of it back to the original:</p>
+\[ I_{sharp}=I+\alpha(I-I*G_\sigma)=I*\big[(1+\alpha)\,\delta-\alpha\,G_\sigma\big] \]
+<p>In the frequency domain the filter's response is \(H(\omega) = 1+\alpha\,(1-\hat G_\sigma(\omega))\). The Gaussian passes low frequencies (\(\hat G \approx 1\) near DC) and suppresses high ones (\(\hat G \to 0\)), so the gain is 1 at low frequencies (overall brightness and smooth regions are unchanged) and rises to \(1+\alpha\) at high frequencies. The kernel weights sum to \((1+\alpha)-\alpha = 1\), which is why average brightness is preserved. &sigma; sets the cutoff, since it decides which frequencies count as "detail". A small &sigma; boosts only very fine detail, and a large &sigma; boosts coarser structure too.
+The bracket is the <strong>unsharp mask filter</strong>, a single kernel: a boosted center pixel minus a Gaussian-weighted local average.
+&alpha; = 0 is the identity. I checked that the two-step and single-kernel versions agree to ~3&times;10<sup>&minus;15</sup>.</p>
+<pre><code>def build_unsharp_kernel(ksize, sigma, alpha):
+    g = cv2.getGaussianKernel(ksize, sigma); G = g @ g.T
+    delta = np.zeros_like(G); delta[ksize//2, ksize//2] = 1.0
+    return (1 + alpha) * delta - alpha * G      # = I + a*(I - I*G)</code></pre>
+<p>The method is called "unsharp" masking because the mask is built from a blurred (unsharp) copy of the image. Sharpening is therefore the opposite of blurring, but it is <em>built from</em> a blur: the blur tells us which frequencies are "low", and everything else is the detail we amplify.</p>
+<figure class="figure "><img src="assets/project2/21_1.png" alt="Taj Mahal: original, blurred (&amp;sigma; = 3), high frequencies (rescaled for display), sharpened (&amp;alpha; = 1.5)." loading="lazy" onerror="imgFallback(this)"><figcaption>Taj Mahal: original, blurred (&sigma; = 3), high frequencies (rescaled for display), sharpened (&alpha; = 1.5).</figcaption></figure>
+<figure class="figure "><img src="assets/project2/21_2.png" alt="Second image (&amp;sigma; = 3, &amp;alpha; = 3.0)." loading="lazy" onerror="imgFallback(this)"><figcaption>Second image (&sigma; = 3, &alpha; = 3.0).</figcaption></figure>
+<figure class="figure "><img src="assets/project2/21_3.png" alt="Third image (&amp;sigma; = 3, &amp;alpha; = 4.5)." loading="lazy" onerror="imgFallback(this)"><figcaption>Third image (&sigma; = 3, &alpha; = 4.5).</figcaption></figure>
+<figure class="figure "><img src="assets/project2/21_4.png" alt="Fourth image (&amp;sigma; = 3, &amp;alpha; = 2.5)." loading="lazy" onerror="imgFallback(this)"><figcaption>Fourth image (&sigma; = 3, &alpha; = 2.5).</figcaption></figure>
+<h4>Varying the sharpening amount</h4>
+<figure class="figure "><img src="assets/project2/21_5.png" alt="Taj Mahal, &amp;alpha; = 0, 0.5, 1, 2, 4." loading="lazy" onerror="imgFallback(this)"><figcaption>Taj Mahal, &alpha; = 0, 0.5, 1, 2, 4.</figcaption></figure>
+<figure class="figure "><img src="assets/project2/21_6.png" alt="Second image, same &amp;alpha; sweep." loading="lazy" onerror="imgFallback(this)"><figcaption>Second image, same &alpha; sweep.</figcaption></figure>
+<figure class="figure "><img src="assets/project2/21_7.png" alt="Third image, same &amp;alpha; sweep." loading="lazy" onerror="imgFallback(this)"><figcaption>Third image, same &alpha; sweep.</figcaption></figure>
+<figure class="figure "><img src="assets/project2/21_8.png" alt="Fourth image, same &amp;alpha; sweep." loading="lazy" onerror="imgFallback(this)"><figcaption>Fourth image, same &alpha; sweep.</figcaption></figure>
+
+<p>Edges and fine texture strengthen steadily as &alpha; grows. At the high end of the sweep (&alpha; = 2&ndash;4 on the Taj Mahal), bright and dark halos appear around strong edges (ringing) and noise is amplified along with detail.</p>
+<p><p>Unsharp masking doesn't recover information. It amplifies the contrast of high frequencies that are still present, which is why it looks sharper. On an image that was blurred first, the fine detail is largely gone and boosting the remainder mostly produces noise and halos.</p>
+<h4>Evaluation: blur a sharp image, then sharpen it</h4>
+<figure class="figure "><img src="assets/project2/21_9.png" alt="Sharp original, Gaussian blur (&amp;sigma; = 5), unsharp mask with &amp;sigma; = 5, &amp;alpha; = 4.4." loading="lazy" onerror="imgFallback(this)"><figcaption>Sharp original, Gaussian blur (&sigma; = 5), unsharp mask with &sigma; = 5, &alpha; = 4.4.</figcaption></figure>
+
+<p><strong>Observations.</strong> The re-sharpened image looks much crisper: the lettering and bicycle outlines regain contrast. But it is not the original:
+PSNR against it goes from 23.21 dB (blurred) to only 23.60 dB. Blurring discards frequencies above the cutoff, so unsharp masking can only boost what faint high-frequency residue survives;
+it cannot restore lost detail, and it amplifies noise and adds halos. Recovering the original would need deconvolution, not sharpening.</p>
+
+<h3 id="p22">2.2 Hybrid images</h3>
+<p>Following Oliva et al., each hybrid is the <strong>high-pass</strong> of one image (\(I_1 - I_1*G_{\sigma_1}\)) plus the <strong>low-pass</strong> of another (\(I_2*G_{\sigma_2}\)),
+after aligning the pair by two hand-picked landmarks (rotate, scale, translate, crop). Up close you see the high-frequency image; from far away, or shrunk, you see the low-frequency one.</p>
+<h4>Full process for one pair</h4>
+<p>(This is one of the pictures where people say Ariana and Cynthia look the same.)</p>
+<figure class="figure "><img src="assets/project2/22_1.png" alt="Original pair (grid shows pixel coordinates used to pick the two alignment points per image)." loading="lazy" onerror="imgFallback(this)"><figcaption>Original pair (grid shows pixel coordinates used to pick the two alignment points per image).</figcaption></figure>
+<figure class="figure "><img src="assets/project2/22_2.png" alt="Aligned pair." loading="lazy" onerror="imgFallback(this)"><figcaption>Aligned pair.</figcaption></figure>
+<figure class="figure "><img src="assets/project2/22_3.png" alt="Cutoff sweep: &amp;sigma;&lt;sub&gt;1&lt;/sub&gt; &amp;isin; {2, 4, 8} (high-pass) &amp;times; &amp;sigma;&lt;sub&gt;2&lt;/sub&gt; &amp;isin; {4, 8, 16} (low-pass)." loading="lazy" onerror="imgFallback(this)"><figcaption>Cutoff sweep: &sigma;<sub>1</sub> &isin; {2, 4, 8} (high-pass) &times; &sigma;<sub>2</sub> &isin; {4, 8, 16} (low-pass).</figcaption></figure>
+
+<p><strong>Cutoff choice.</strong> Small &sigma;<sub>1</sub> keeps only very fine detail (it vanishes from a distance), while large &sigma;<sub>2</sub> blurs the low-pass image until its identity is lost.
+I chose <strong>&sigma;<sub>1</sub> = 4</strong> for the high-pass image and <strong>&sigma;<sub>2</sub> = 6</strong> for the low-pass image: this pair gave the best balance in the sweep between the two identities.
+With a Gaussian, the cutoff (where gain falls to ~0.5) is at about f<sub>c</sub> &asymp; 0.19/&sigma; cycles per pixel.</p>
+
+<figure class="figure "><img src="assets/project2/22_4.jpg" alt="Top: input images, filtered images and hybrid. Bottom: log|FFT| of each." loading="lazy" onerror="imgFallback(this)"><figcaption>Top: input images, filtered images and hybrid. Bottom: log|FFT| of each.</figcaption></figure>
+
+<p><strong>Fourier analysis.</strong> The low-passed image&rsquo;s spectrum is visibly confined to a small region around the center (DC), with everything outside dark.
+The high-passed image keeps its energy in the outer, high-frequency region. 
+The hybrid&rsquo;s spectrum combines the two: low frequencies from image 2, high frequencies from image 1.</p>
+<div class="single-image" style="max-width:480px"><figure class="figure "><img src="assets/project2/22_5.png" alt="Final hybrid #1 (&amp;sigma;&lt;sub&gt;1&lt;/sub&gt; = 4, &amp;sigma;&lt;sub&gt;2&lt;/sub&gt; = 6)." loading="lazy" onerror="imgFallback(this)"><figcaption>Final hybrid #1 (&sigma;<sub>1</sub> = 4, &sigma;<sub>2</sub> = 6).</figcaption></figure>
+</div>
+
+<h4>More hybrids</h4>
+<p>Hybrid 2, showing Ariana and Cynthia in another instance</p>
+<figure class="figure "><img src="assets/project2/22_6.png" alt="Hybrid 2 (&amp;sigma;&lt;sub&gt;1&lt;/sub&gt; = 4.0, &amp;sigma;&lt;sub&gt;2&lt;/sub&gt; = 8.5): high-pass from image 1, low-pass from image 2." loading="lazy" onerror="imgFallback(this)"><figcaption>Hybrid #2 (&sigma;<sub>1</sub> = 4.0, &sigma;<sub>2</sub> = 8.5): high-pass from image 1, low-pass from image 2.</figcaption></figure>
+<p>Hybrid 3, showing Oli London and BTS member</p>
+<figure class="figure "><img src="assets/project2/22_7.png" alt="Hybrid 3 (&amp;sigma;&lt;sub&gt;1&lt;/sub&gt; = 3.0, &amp;sigma;&lt;sub&gt;2&lt;/sub&gt; = 4.0): high-pass from image 2, low-pass from image 1." loading="lazy" onerror="imgFallback(this)"><figcaption>Hybrid #3 (&sigma;<sub>1</sub> = 3.0, &sigma;<sub>2</sub> = 4.0): high-pass from image 2, low-pass from image 1.</figcaption></figure>
+<p>Hybrid 4, showing the hamster meme and a random guy from TikTok</p>
+<figure class="figure "><img src="assets/project2/22_8.png" alt="Hybrid 4 (&amp;sigma;&lt;sub&gt;1&lt;/sub&gt; = 3.0, &amp;sigma;&lt;sub&gt;2&lt;/sub&gt; = 4.0): a photo (low-pass) and a line drawing (high-pass), a change of medium rather than of expression." loading="lazy" onerror="imgFallback(this)"><figcaption>Hybrid #4 (&sigma;<sub>1</sub> = 3.0, &sigma;<sub>2</sub> = 4.0): a photo (low-pass) and a line drawing (high-pass), a change of medium rather than of expression.</figcaption></figure>
+<p>Derek and Nutmeg</p>
+<figure class="figure "><img src="assets/project2/22_9.png" alt="Hybrid 5 (&amp;sigma;&lt;sub&gt;1&lt;/sub&gt; = 3.0, &amp;sigma;&lt;sub&gt;2&lt;/sub&gt; = 4.0): high-pass from image 1, low-pass from image 2." loading="lazy" onerror="imgFallback(this)"><figcaption>Hybrid #5 (&sigma;<sub>1</sub> = 3.0, &sigma;<sub>2</sub> = 4.0): high-pass from image 1, low-pass from image 2.</figcaption></figure>
+
+<h3 id="p23">2.3 Gaussian and Laplacian stacks</h3>
+<p>
+A stack is a pyramid without downsampling: every level keeps the original image
+size. Level k of the Gaussian stack is obtained by applying the same Gaussian
+blur to level k&minus;1. The Laplacian stack is formed by subtracting consecutive
+Gaussian levels, producing band-pass components, with the final blurred Gaussian
+image retained as the low-frequency residual. Summing all Laplacian levels
+reconstructs the original image with negligible numerical error (max error
+~10<sup>&minus;16</sup>). No <code>cv2.pyrDown</code> or
+<code>skimage</code> pyramid functions are used.
+</p>
+
+<figure class="figure">
+    <img src="assets/project2/23_gaussian.png"
+         alt="Gaussian stacks for the apple and orange images"
+         loading="lazy"
+         onerror="imgFallback(this)">
+    <figcaption>
+        Gaussian stacks for the apple and orange images. Each stack contains
+        5 levels at the original image resolution, with &sigma; = 4 applied
+        at each successive level.
+    </figcaption>
+</figure>
+
+<figure class="figure">
+    <img src="assets/project2/23_laplacian.png"
+         alt="Laplacian stacks for the apple and orange images"
+         loading="lazy"
+         onerror="imgFallback(this)">
+    <figcaption>
+        Laplacian stacks for the apple and orange images. Levels 0&ndash;3
+        show progressively coarser band-pass components, while level 4 is
+        the low-frequency residual. For visualization, each Laplacian level
+        is independently normalized around zero; this normalization is only
+        for display and does not affect reconstruction.
+    </figcaption>
+</figure>
+
+<figure class="figure">
+    <img src="assets/project2/23_1.jpg"
+         alt="Recreation of Szeliski Figure 3.42 (a) through (l)"
+         loading="lazy"
+         onerror="imgFallback(this)">
+    <figcaption>
+        Recreation of Szeliski Fig. 3.42 (a)&ndash;(l): rows show Laplacian
+        levels 0, 1, and 3 of the masked apple, masked orange, and their
+        blended contributions; the final row shows the original apple,
+        original orange, and reconstructed oraple. The blend uses the
+        Gaussian-blurred mask at each level. Stack: 5 levels,
+        &sigma; = 4 per step.
+    </figcaption>
+</figure>
+
+<h3 id="p24">2.4 Multiresolution blending</h3>
+<p>For each level k, blend the two Laplacian levels with the k-th level of a <em>Gaussian stack of the mask</em>, then sum all levels:
+\(L_{blend}[k]=GM[k]\,L_1[k]+(1-GM[k])\,L_2[k]\). Low-frequency bands get a very soft transition and fine detail a sharp one, so no seam is visible.</p>
+<pre><code>def blend_multires(im1, im2, mask, num_levels, sigma_step):
+    l1 = laplacian_stack(gaussian_stack(im1, num_levels, sigma_step))
+    l2 = laplacian_stack(gaussian_stack(im2, num_levels, sigma_step))
+    gm = gaussian_stack(mask, num_levels, sigma_step)          # mask is blurred per level
+    levels = [gm[k][..., None]*l1[k] + (1-gm[k][..., None])*l2[k] for k in range(num_levels)]
+    return sum(levels)</code></pre>
+<figure class="figure "><img src="assets/project2/24_1.png" alt="Oraple: vertical step-function mask, 6 levels, &amp;sigma; = 2 per level, mask pre-blurred with &amp;sigma; = 10." loading="lazy" onerror="imgFallback(this)"><figcaption>Oraple: vertical step-function mask, 6 levels, &sigma; = 2 per level, mask pre-blurred with &sigma; = 10.</figcaption></figure>
+<figure class="figure "><img src="assets/project2/24_2.png" alt="Custom blend 1: horizontal seam at 60% of the image height." loading="lazy" onerror="imgFallback(this)"><figcaption>Custom blend of Ariana and Cynthia again: horizontal seam at 60% of the image height.</figcaption></figure>
+<figure class="figure "><img src="assets/project2/24_3.png" alt="Custom blend 2: irregular mask (thresholded blurred noise) rather than a straight line." loading="lazy" onerror="imgFallback(this)"><figcaption>Custom blend 2, again of Ariana and Cynthia: irregular mask (thresholded blurred noise) rather than a straight line.</figcaption></figure>
+
+<h4>Process illustration (the irregular blend)</h4>
+<figure class="figure "><img src="assets/project2/24_4.png" alt="Masked band-pass contributions of each image and their sum at levels 0, 2 and 4 (coarsest residual), then the masked inputs and the final blend, in the style of Fig. 10 of Burt &amp;amp; Adelson." loading="lazy" onerror="imgFallback(this)"><figcaption>Masked band-pass contributions of each image and their sum at levels 0, 2 and 4, then the masked inputs and the final blend, in the style of Fig. 10 of Burt &amp; Adelson.</figcaption></figure>
+
+
+<hr class="rule">
+</main>
+
+<footer class="site-footer">
+  <p>CS180 · <a href="https://github.com/">GitHub</a></p>
+</footer>
+</body>
+</html>

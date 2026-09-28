@@ -311,3 +311,10 @@ hr.rule {
 }
 .site-footer a { color: var(--ink-soft); }
 .site-footer a:hover { color: var(--accent); }
+
+.toc { display: flex; flex-wrap: wrap; gap: 0.4rem 1.2rem; margin: 1.5rem 0 0.5rem; font-size: 0.92rem; }
+.toc a { text-decoration: none; }
+h4 { font-family: var(--serif); font-size: 1rem; margin: 1.6em 0 0.4em; color: var(--ink); }
+.container-wide p, .container-wide pre, .container-wide table { max-width: var(--measure); }
+.container-wide table { max-width: 100%; }
+.single-image .figure { margin: 0; }
