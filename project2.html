@@ -5,8 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Project 2 — Fun with Filters and Frequencies</title>
 <script src="script.js"></script>
-<script>window.MathJax={tex:{inlineMath:[['\\(','\\)']],displayMath:[['\\[','\\]']]}};</script>
-<script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
+<script>
+window.MathJax = {
+    tex: {
+        inlineMath: [['\\(', '\\)']],
+        displayMath: [['\\[', '\\]']]
+    },
+    startup: {
+        typeset: true
+    }
+};
+</script>
+<script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -259,7 +269,7 @@ assert np.allclose(box_2loop, box_scipy)</code></pre>
 <p>
 Finally, I applied the finite difference operators
 <code>D<sub>x</sub> = [1 0 -1]</code> and
-<code>D<sub>y</sub> = D<sub>x</sub><sup>T</sup>.
+<code>D<sub>y</sub> = D<sub>x</sub><sup>T</sup>.</code>
 These filters approximate horizontal and vertical intensity changes,
 highlighting edges in the image.
 </p>
