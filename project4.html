@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Project 4: Image Warping and Mosaicing</title>
+<script src="script.js"></script>
+<script>
+window.MathJax = {
+    tex: {
+        inlineMath: [['\\(', '\\)']],
+        displayMath: [['\\[', '\\]']]
+    },
+    startup: {
+        typeset: true
+    }
+};
+</script>
+<script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <nav class="nav">
+    <a class="nav-title" href="index.html">CS180 — Computational Photography</a>
+    <div class="nav-links">
+      <a href="index.html">Home</a>
+      <a href="project0.html">Project 0</a>
+      <a href="project1.html">Project 1</a>
+      <a href="project2.html">Project 2</a>
+      <a href="project3.html">Project 3</a>
+      <a href="project4a.html" aria-current="page">Project 4a</a>
+    </div>
+  </nav>
+</header>
+
+<main class="container-wide">
+<section class="hero">
+  <h1>Project 4a: Image Warping and Mosaicing</h1>
+  <p class="lede">Part A recovers homographies from hand-picked correspondences, warps images by inverse mapping with
+  nearest-neighbor and bilinear interpolation written from scratch, rectifies planar objects, and blends photos taken
+  from one spot into mosaics.</p>
+</section>
+
+<nav class="toc">
+  <a href="#a1">A.1 Photos</a> <a href="#a2">A.2 Homographies</a> <a href="#a3">A.3 Warping &amp; rectification</a>
+  <a href="#a4">A.4 Mosaics</a> <a href="#learned">What I learned</a>
+</nav>
+
+<h3 id="a1">A.1 Shoot and digitize pictures</h3>
+<p>
+Each mosaic set was shot from one spot by rotating the camera instead of moving it, so the photos in a set are related by
+projective transformations (a fixed center of projection). The three sets below are the source images for the mosaics in A.4. The photo
+marked <em>reference</em> is the one I leave unwarped; the others are warped into its frame. The two rectification photos are shown in A.3.
+</p>
+<div class="single-image" style="max-width:900px"><figure class="figure"><img src="assets/project4a/mosaic1_sources.png" alt="Three source photos of a room" loading="lazy" onerror="imgFallback(this)"><figcaption>Set 1, room: three photos, panning across. The middle photo is the reference.</figcaption></figure></div>
+<div class="single-image" style="max-width:800px"><figure class="figure"><img src="assets/project4a/mosaic2_sources.png" alt="Two source photos of a street" loading="lazy" onerror="imgFallback(this)"><figcaption>Set 2, street: two photos. The right photo is the reference, so the left one is warped.</figcaption></figure></div>
+<div class="single-image" style="max-width:900px"><figure class="figure"><img src="assets/project4a/mosaic3_sources.png" alt="Three source photos of a street corner" loading="lazy" onerror="imgFallback(this)"><figcaption>Set 3, street corner: three photos. The second photo is the reference.</figcaption></figure></div>
+
+<h3 id="a2">A.2 Recover homographies</h3>
+<p>
+A homography maps a point \((x, y)\) to \((x', y')\) through
+\[
+\begin{bmatrix} x' \\ y' \\ w \end{bmatrix} \sim H \begin{bmatrix} x \\ y \\ 1 \end{bmatrix},
+\qquad H = \begin{bmatrix} a &amp; b &amp; c \\ d &amp; e &amp; f \\ g &amp; h &amp; 1 \end{bmatrix},
+\]
+so \(x' = \dfrac{ax + by + c}{gx + hy + 1}\) and \(y' = \dfrac{dx + ey + f}{gx + hy + 1}\). Multiplying out the denominator gives two equations
+that are linear in the eight unknowns for every correspondence:
+\[
+\begin{aligned}
+x' &amp;= ax + by + c - g\,x x' - h\,y x' \\
+y' &amp;= dx + ey + f - g\,x y' - h\,y y'
+\end{aligned}
+\]
+Stacking \(n\) correspondences gives \(A\mathbf{h} = \mathbf{b}\), where \(A\) is \(2n \times 8\) and \(\mathbf{h} = (a, b, c, d, e, f, g, h)^\top\).
+With \(n = 4\) the system is exactly determined, but it is very sensitive to click error. With \(n > 4\) it is overdetermined, and I solve it by least squares.
+</p>
+<pre><code>def computeH(im1_pts, im2_pts):
+    # H maps im1 -&gt; im2 (p' = Hp). Points are (x, y), shape (n, 2), n &gt;= 4.
+    A, b = [], []
+    for (x, y), (xp, yp) in zip(im1_pts, im2_pts):
+        A.append([x, y, 1, 0, 0, 0, -x*xp, -y*xp]); b.append(xp)
+        A.append([0, 0, 0, x, y, 1, -x*yp, -y*yp]); b.append(yp)
+    A, b = np.array(A), np.array(b)
+    h, *_ = np.linalg.lstsq(A, b, rcond=None)      # least squares when n &gt; 4
+    return np.append(h, 1).reshape(3, 3), A, b</code></pre>
+<p>
+I picked points by clicking on the images (a small matplotlib click tool) and saved them to a file. For the mosaics I used 12 to 16 correspondences per pair,
+spread over the overlap and placed on sharp corners and distinctive features. For rectification I clicked the four corners of a known rectangle and mapped
+them to the corners of an axis-aligned rectangle.
+</p>
+
+<h4>The system of equations (rectification of the first image)</h4>
+<p>
+Four corner clicks in the image, mapped to the corners of a 400&times;300 rectangle (0,0), (399,0), (399,299), (0,299), give an 8&times;8 system. Each row is one equation; the columns are
+the coefficients of \(a, b, c, d, e, f, g, h\), followed by the right-hand side \(\mathbf{b}\):
+</p>
+<pre><code>       a         b         c         d         e         f         g         h  |     rhs
+   185.6     315.3       1.0       0.0       0.0       0.0       0.0       0.0  |       0
+     0.0       0.0       0.0     185.6     315.3       1.0       0.0       0.0  |       0
+   614.2     230.4       1.0       0.0       0.0       0.0  -245050.2  -91921.7  |     399
+     0.0       0.0       0.0     614.2     230.4       1.0       0.0       0.0  |       0
+   531.0     734.6       1.0       0.0       0.0       0.0  -211886.6  -293114.4  |     399
+     0.0       0.0       0.0     531.0     734.6       1.0  -158782.2  -219652.2  |     299
+   224.4     910.1       1.0       0.0       0.0       0.0       0.0       0.0  |       0
+     0.0       0.0       0.0     224.4     910.1       1.0  -67106.1  -272117.4  |     299</code></pre>
+<p>
+The solution is the homography below. The mosaic systems have exactly the same form, just with more rows (24 to 32).
+</p>
+
+<h4>Correspondences and recovered homographies: rectification</h4>
+<p>
+With exactly four correspondences the fit is exact, so the reprojection error is 0 by construction. These homographies map the image onto the target rectangle (400&times;300 for the first, 300&times;400 for the second).
+</p>
+<div class="compare-pair">
+<figure><img src="assets/project4a/rect1_points.png" alt="Rectification image 1 with four clicked corners" loading="lazy" onerror="imgFallback(this)"><figcaption>Rectification 1: clicked corners 1&ndash;4 (top-left, top-right, bottom-right, bottom-left).</figcaption></figure>
+<figure><img src="assets/project4a/rect2_points.png" alt="Rectification image 2 with four clicked corners" loading="lazy" onerror="imgFallback(this)"><figcaption>Rectification 2: clicked corners 1&ndash;4.</figcaption></figure>
+</div>
+<pre><code>H (rectification 1)
+[      0.52676     -0.034354       -86.958 ]
+[     0.051035       0.25739       -90.642 ]
+[  -0.00054742   -0.00039395             1 ]
+
+H (rectification 2)
+[      0.36393      0.030327       -99.699 ]
+[      0.07661        0.2715        -160.9 ]
+[  -0.00061733   -0.00043615             1 ]</code></pre>
+
+<h4>Correspondences and recovered homographies: mosaics</h4>
+<p>
+In each figure the left panel is the image being warped and the right panel is the reference. Numbers mark matching points. Each <code>H</code> maps the left image into the reference image's frame.
+The table summarizes the fits; the residual is the distance between \(H p\) and the clicked reference point, in pixels.
+</p>
+<table>
+<tr><th>Set</th><th>Pair</th><th>Correspondences</th><th>Mean error (px)</th><th>Max error (px)</th></tr>
+<tr><td>1</td><td>left &rarr; middle (reference)</td><td>16</td><td>2.29</td><td>4.77</td></tr>
+<tr><td>1</td><td>right &rarr; middle (reference)</td><td>14</td><td>2.55</td><td>4.58</td></tr>
+<tr><td>2</td><td>left &rarr; right (reference)</td><td>12</td><td>2.38</td><td>4.98</td></tr>
+<tr><td>3</td><td>photo 1 &rarr; photo 2 (reference)</td><td>13</td><td>2.52</td><td>7.97</td></tr>
+<tr><td>3</td><td>photo 3 &rarr; photo 2 (reference)</td><td>13</td><td>3.43</td><td>8.14</td></tr>
+</table>
+
+<h3>Set 1, left &rarr; middle</h3>
+<div class="single-image" style="max-width:900px"><figure class="figure"><img src="assets/project4a/mosaic1_points_left.png" alt="Correspondences between the left and middle room photos" loading="lazy" onerror="imgFallback(this)"><figcaption>Set 1: 16 correspondences, left image (to warp) and middle image (reference).</figcaption></figure></div>
+<pre><code>[       1.0893      0.028712       -150.54 ]
+[     0.050004         1.038       -15.742 ]
+[   0.00012043   -2.7139e-06             1 ]</code></pre>
+<h3>Set 1, right &rarr; middle</h3>
+<div class="single-image" style="max-width:900px"><figure class="figure"><img src="assets/project4a/mosaic1_right.png" alt="Correspondences between the right and middle room photos" loading="lazy" onerror="imgFallback(this)"><figcaption>Set 1: 14 correspondences, right image (to warp) and middle image (reference).</figcaption></figure></div>
+<pre><code>[      0.93281      0.006003        105.04 ]
+[    -0.074309       0.99832        -4.201 ]
+[  -0.00011632    2.4473e-05             1 ]</code></pre>
+<h3>Set 2, left &rarr; right</h3>
+<div class="single-image" style="max-width:900px"><figure class="figure"><img src="assets/project4a/mosaic2_points.png" alt="Correspondences between the two street photos" loading="lazy" onerror="imgFallback(this)"><figcaption>Set 2: 12 correspondences, left image (to warp) and right image (reference).</figcaption></figure></div>
+<pre><code>[       1.2549     -0.046243        -347.5 ]
+[      0.27641         1.162       -119.95 ]
+[   0.00037177   -2.0136e-05             1 ]</code></pre>
+<h3>Set 3, photo 1 &rarr; photo 2</h3>
+<div class="single-image" style="max-width:900px"><figure class="figure"><img src="assets/project4a/mosaic3_points_left.png" alt="Correspondences between photos 1 and 2 of the street corner" loading="lazy" onerror="imgFallback(this)"><figcaption>Set 3: 13 correspondences, photo 1 (to warp) and photo 2 (reference).</figcaption></figure></div>
+<pre><code>[       1.1604     -0.011761       -243.06 ]
+[       0.1427        1.0957       -85.532 ]
+[   0.00017888   -1.6513e-06             1 ]</code></pre>
+<h3>Set 3, photo 3 &rarr; photo 2</h3>
+<div class="single-image" style="max-width:900px"><figure class="figure"><img src="assets/project4a/mosaic3_points_right.png" alt="Correspondences between photos 3 and 2 of the street corner" loading="lazy" onerror="imgFallback(this)"><figcaption>Set 3: 13 correspondences, photo 3 (to warp) and photo 2 (reference).</figcaption></figure></div>
+<pre><code>[      0.89479      0.017766        191.25 ]
+[    -0.095646       0.95822        41.108 ]
+[  -0.00011615   -4.9267e-07             1 ]</code></pre>
+<p>
+The mosaic residuals are about 2 to 3.5 px on average. Four correspondences would have fit with zero error, but the extra points average out my clicking error instead of letting the homography absorb it.
+The largest single residuals are about 4.6 to 8.1 px.
+</p>
+
+<h3 id="a3">A.3 Warp the images</h3>
+<p>
+Both warps use <strong>inverse warping</strong>. For every pixel of the output canvas I compute \(p = H^{-1}p'\), divide by the last coordinate, and sample the source image at that location. Every output pixel is visited exactly once, so there are no holes.
+</p>
+<ul>
+<li><strong>Convention.</strong> \((0,0)\) is the <em>center</em> of the first pixel, so a source location is inside the image when \(0 \le x \le w-1\) and \(0 \le y \le h-1\).</li>
+<li><strong>Canvas size.</strong> I push the four image corners through \(H\) and take the bounding box. For mosaics I take the union of the boxes of all images, so everything lands on one shared canvas.</li>
+<li><strong>Missing pixels.</strong> Output pixels whose source location falls outside the image get alpha 0. The function returns this mask, and the blending step uses it.</li>
+<li><strong>Nearest neighbor</strong> rounds the source location to the closest pixel. <strong>Bilinear</strong> takes the weighted average of the four surrounding pixels, with weights from the fractional part of the location.</li>
+</ul>
+<pre><code>def _warp(im, H, interp, bbox=None):
+    h, w = im.shape[:2]
+    if bbox is None:                                   # bounding box from the 4 corners through H
+        c = corners_through_H(im, H)
+        bbox = (int(np.floor(c[0].min())), int(np.floor(c[1].min())),
+                int(np.ceil(c[0].max())),  int(np.ceil(c[1].max())))
+    x0, y0, x1, y1 = bbox
+    xs, ys = np.meshgrid(np.arange(x0, x1+1), np.arange(y0, y1+1))
+    pts = np.stack([xs.ravel(), ys.ravel(), np.ones(xs.size)])
+    src = np.linalg.inv(H) @ pts                       # inverse warp: output pixel -&gt; source location
+    sx, sy = src[0] / src[2], src[1] / src[2]          # (0,0) = center of the first pixel
+    valid = (sx &gt;= 0) &amp; (sx &lt;= w-1) &amp; (sy &gt;= 0) &amp; (sy &lt;= h-1)   # alpha mask
+    if interp == 'nn':
+        xi = np.clip(np.rint(sx).astype(int), 0, w-1)
+        yi = np.clip(np.rint(sy).astype(int), 0, h-1)
+        out = im[yi, xi]
+    else:
+        xf = np.clip(np.floor(sx).astype(int), 0, w-2); yf = np.clip(np.floor(sy).astype(int), 0, h-2)
+        dx = np.clip(sx - xf, 0, 1)[:, None]; dy = np.clip(sy - yf, 0, 1)[:, None]
+        out = ((1-dx)*(1-dy)*im[yf, xf] + dx*(1-dy)*im[yf, xf+1] +
+               (1-dx)*dy*im[yf+1, xf] + dx*dy*im[yf+1, xf+1])
+    out = out * valid[:, None]
+    shape = (y1-y0+1, x1-x0+1)
+    return out.reshape(*shape, im.shape[2]), valid.reshape(shape), (x0, y0)
+
+def warpImageNearestNeighbor(im, H, bbox=None): return _warp(im, H, 'nn', bbox)
+def warpImageBilinear(im, H, bbox=None):        return _warp(im, H, 'bil', bbox)</code></pre>
+
+<h4>Rectification</h4>
+<p>
+To test the code on a single image, I took photos of objects I know are rectangles and clicked their four corners. The first is a poster in an acrylic stand, mapped to a 400&times;300 rectangle; the second is a set of desk drawers, mapped to a 300&times;400 rectangle. Both warps are shown for each image.
+</p>
+<figure class="figure"><img src="assets/project4a/rect1_comp.png" alt="Poster in an acrylic stand with clicked corners, and the nearest-neighbor and bilinear rectified results" loading="lazy" onerror="imgFallback(this)"><figcaption>Rectification 1: original with the clicked corners, nearest neighbor (26 ms) and bilinear (82 ms).</figcaption></figure>
+<figure class="figure"><img src="assets/project4a/rect2_comp.png" alt="Desk drawers with clicked corners, and the nearest-neighbor and bilinear rectified results" loading="lazy" onerror="imgFallback(this)"><figcaption>Rectification 2: original with the clicked corners, nearest neighbor (40 ms) and bilinear (69 ms).</figcaption></figure>
+<p>
+In both results the viewing angle is gone: the poster's text lines are horizontal and the drawer fronts are rectangles facing the camera. The edges of the rectified region follow the clicked corners.
+</p>
+
+<h4>Nearest neighbor vs. bilinear</h4>
+<p>
+Comparison: Zoomed in 8&times; with pixel-exact rendering, nearest neighbor (left) shows stair-stepped edges on letters and the drawer gap, while bilinear (right) has smooth edges.
+</p>
+<div class="single-image" style="max-width:900px"><figure class="figure"><img src="assets/project4a/rect1_zoom.png" alt="Zoomed crop of the rectified poster text, nearest neighbor on the left and bilinear on the right" loading="lazy" onerror="imgFallback(this)"><figcaption>Rectification 1, zoomed 8&times;: nearest neighbor (left), bilinear (right).</figcaption></figure></div>
+<div class="single-image" style="max-width:900px"><figure class="figure"><img src="assets/project4a/rect2_zoom.png" alt="Zoomed crop of the rectified drawers, nearest neighbor on the left and bilinear on the right" loading="lazy" onerror="imgFallback(this)"><figcaption>Rectification 2, zoomed 8&times;: nearest neighbor (left), bilinear (right).</figcaption></figure></div>
+<table>
+<caption>Time for one warp of the output image (single run, vectorized NumPy on CPU)</caption>
+<tr><th>Image</th><th>Output size</th><th>Nearest neighbor</th><th>Bilinear</th><th>Bilinear / NN</th></tr>
+<tr><td>Rectification 1</td><td>400&times;300</td><td>25.6 ms</td><td>81.6 ms</td><td>3.2&times;</td></tr>
+<tr><td>Rectification 2</td><td>300&times;400</td><td>39.5 ms</td><td>69.1 ms</td><td>1.8&times;</td></tr>
+</table>
+<p>
+<strong>Speed.</strong> Nearest neighbor does one lookup per output pixel. Bilinear does four lookups plus the weight arithmetic, so it was about 2 to 3 times slower in my runs. Both grow linearly with the number of output pixels, and
+the inverse mapping itself (the matrix multiply and divide) is shared. These are single timings on small images, so the exact ratio is noisy and I would only trust the order of magnitude.
+</p>
+<p>
+<strong>Quality.</strong> Nearest neighbor creates jagged, stair-stepped edges and aliasing on diagonal lines and fine texture, because each output pixel copies a single source pixel and the rounding error changes along an edge.
+Bilinear averages neighbors, so edges are smooth, at the cost of slight blur. At normal size the two rectified images look close, and the difference shows up in the zoomed crops. For mosaics, where small misalignments and aliasing in the overlap would be visible, I use bilinear.
+</p>
+
+<h3 id="a4">A.4 Blend the images into a mosaic</h3>
+<h4>Procedure</h4>
+<ol>
+<li><strong>Reference frame.</strong> I leave one image unwarped and warp the others into its projection, using the homographies from A.2. For the two three-image sets the reference is the second photo, so both outer photos are warped by one homography each.</li>
+<li><strong>Canvas.</strong> I push the corners of every image through its homography (the identity for the reference) and take the union of the bounding boxes. Every image is then warped onto that same canvas with bilinear inverse warping, which gives a stack of images and alpha masks.</li>
+<li><strong>Weights.</strong> For each image the weight at a pixel is the Euclidean distance transform of its alpha mask: zero outside the image and growing toward its interior, so each image fades out near its own borders.</li>
+<li><strong>Blend.</strong> A plain feathered average (weighted by these distances) removes the hard seam but can still blur high-frequency detail where the images are slightly misaligned. So I use a two-band blend. The low-pass band (a Gaussian blur with \(\sigma = 4\), computed with normalized convolution so the blurred borders do not go dark) is feather-averaged. The high-pass band (image minus its low-pass) is taken from whichever image has the larger weight at that pixel.</li>
+</ol>
+<pre><code># weights: distance to the nearest invalid pixel of each warped image
+ws = [distance_transform_edt(a) for a in alphas]
+
+def blend_twoband(ims, alphas, ws, sigma=4):
+    lows = []
+    for im, a in zip(ims, alphas):                     # normalized convolution so borders don't go dark
+        af = a.astype(float); den = gaussian_filter(af, sigma) + 1e-8
+        lows.append(np.stack([gaussian_filter(im[..., k]*af, sigma) / den for k in range(3)], -1))
+    highs = [im - lo for im, lo in zip(ims, lows)]
+    wsum = sum(ws)
+    low = sum(w[..., None]*lo for w, lo in zip(ws, lows)) / (wsum[..., None] + 1e-8)   # feathered low band
+    pick = np.argmax(np.stack(ws), 0)                  # high band from the image with the larger weight
+    high = np.zeros_like(low)
+    for i, hi in enumerate(highs): high[pick == i] = hi[pick == i]
+    return np.clip(low + high, 0, 1) * (wsum &gt; 0)[..., None]</code></pre>
+
+<h4>Mosaic 1: room (3 photos)</h4>
+<p>Reference: middle photo. Correspondences: 16 and 14. Canvas: 999&times;1381.</p>
+<div class="single-image" style="max-width:900px"><figure class="figure"><img src="assets/project4a/mosaic1_warped.png" alt="The three room photos warped onto the shared canvas" loading="lazy" onerror="imgFallback(this)"><figcaption>Warped images on the shared canvas (black = alpha 0).</figcaption></figure></div>
+<div class="single-image" style="max-width:900px"><figure class="figure"><img src="assets/project4a/mosaic1_distweight.png" alt="Distance-transform weights for the three room photos" loading="lazy" onerror="imgFallback(this)"><figcaption>Distance-transform weights, one per image (bright = high weight).</figcaption></figure></div>
+<div class="single-image"><figure class="figure"><img src="assets/project4a/mosaic1_comp.png" alt="Overwrite, plain average, feathered and two-band blends of the room mosaic" loading="lazy" onerror="imgFallback(this)"><figcaption>Overwrite, plain average, feathered average and two-band blend (final), left to right.</figcaption></figure></div>
+<div class="single-image" style="max-width:700px"><figure class="figure"><img src="assets/project4a/mosaic1_final.jpg" alt="Final room mosaic" loading="lazy" onerror="imgFallback(this)"><figcaption>Final mosaic 1 (two-band blend).</figcaption></figure></div>
+
+<h4>Mosaic 2: street (2 photos)</h4>
+<p>Reference: right photo, so the left photo is warped. Correspondences: 12. Canvas: 1138&times;1524.</p>
+<div class="single-image" style="max-width:900px"><figure class="figure"><img src="assets/project4a/mosaic2_warped.png" alt="The two street photos warped onto the shared canvas" loading="lazy" onerror="imgFallback(this)"><figcaption>Warped images on the shared canvas (black = alpha 0).</figcaption></figure></div>
+<div class="single-image" style="max-width:800px"><figure class="figure"><img src="assets/project4a/mosaic2_distweight.png" alt="Distance-transform weights for the two street photos" loading="lazy" onerror="imgFallback(this)"><figcaption>Distance-transform weights, one per image.</figcaption></figure></div>
+<div class="single-image"><figure class="figure"><img src="assets/project4a/mosaic2_comp.png" alt="Overwrite, plain average, feathered and two-band blends of the street mosaic" loading="lazy" onerror="imgFallback(this)"><figcaption>Overwrite, plain average, feathered average and two-band blend (final), left to right.</figcaption></figure></div>
+<div class="single-image" style="max-width:700px"><figure class="figure"><img src="assets/project4a/mosaic2_final.jpg" alt="Final street mosaic" loading="lazy" onerror="imgFallback(this)"><figcaption>Final mosaic 2 (two-band blend).</figcaption></figure></div>
+
+<h4>Mosaic 3: street corner (3 photos)</h4>
+<p>Reference: second photo. Correspondences: 13 and 13. Canvas: 1409&times;1758.</p>
+<div class="single-image" style="max-width:900px"><figure class="figure"><img src="assets/project4a/mosaic3_warped.png" alt="The three street-corner photos warped onto the shared canvas" loading="lazy" onerror="imgFallback(this)"><figcaption>Warped images on the shared canvas (black = alpha 0).</figcaption></figure></div>
+<div class="single-image" style="max-width:900px"><figure class="figure"><img src="assets/project4a/mosaic3_distweight.png" alt="Distance-transform weights for the three street-corner photos" loading="lazy" onerror="imgFallback(this)"><figcaption>Distance-transform weights, one per image.</figcaption></figure></div>
+<div class="single-image"><figure class="figure"><img src="assets/project4a/mosaic3_comp.png" alt="Overwrite, plain average, feathered and two-band blends of the street-corner mosaic" loading="lazy" onerror="imgFallback(this)"><figcaption>Overwrite, plain average, feathered average and two-band blend (final), left to right.</figcaption></figure></div>
+<div class="single-image" style="max-width:700px"><figure class="figure"><img src="assets/project4a/mosaic3_final.jpg" alt="Final street-corner mosaic" loading="lazy" onerror="imgFallback(this)"><figcaption>Final mosaic 3 (two-band blend).</figcaption></figure></div>
+
+<h4>What the blending buys</h4>
+<p>
+In the comparison strips, overwriting leaves a hard vertical edge wherever one photo ends and the next begins, because neighboring photos differ in brightness (most obviously in the street mosaic, where the right photo is brighter than the left).
+A plain average keeps a visible brightness step at the edge of the overlap. The feathered average and the two-band blend turn that step into a gradual transition, and I do not see seams in the final mosaics at normal viewing size.
+The black areas are canvas that no photo covers, and the outlines are curved or slanted because each outer photo has been projected into the reference photo's view.
+</p>
+
+<h3 id="learned">What I learned</h3>
+<p>
+The most important thing I learned is how much a homography depends on the quality of the correspondences rather than on the math. With exactly four clicks the fit is exact, so it reports zero error even when the clicks are slightly off,
+and that error moves the far corners of the warped image a lot. Using 12 to 16 points and a least-squares solve spreads my 2 to 3 pixel click error over many constraints. I also learned that inverse warping is what makes the whole pipeline simple: once the canvas is fixed, each output pixel just asks the source image
+for a value, so there are no holes, and the alpha mask falls out of the same bounds check that decides whether a lookup is valid.
+</p>
+
+<hr class="rule">
+</main>
+
+<footer class="site-footer">
+  <p>CS180 · <a href="https://github.com/">GitHub</a></p>
+</footer>
+</body>
+</html>
